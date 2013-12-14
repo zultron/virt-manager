@@ -118,8 +118,7 @@ def _distill_storage(conn, do_create, nomanaged,
                                                             conn, path)
 
     creator = None
-    backend = diskbackend.StorageBackend(conn, path, vol_object,
-                                         path_is_pool and pool or None)
+    backend = diskbackend.StorageBackend(conn, path, vol_object, pool)
     if not do_create:
         return backend, None
 
@@ -176,7 +175,8 @@ class VirtualDisk(VirtualDevice):
     TYPE_FILE = "file"
     TYPE_BLOCK = "block"
     TYPE_DIR = "dir"
-    types = [TYPE_FILE, TYPE_BLOCK, TYPE_DIR]
+    TYPE_NETWORK = "network"
+    types = [TYPE_FILE, TYPE_BLOCK, TYPE_DIR, TYPE_NETWORK]
 
     IO_MODE_NATIVE = "native"
     IO_MODE_THREADS = "threads"
@@ -208,6 +208,8 @@ class VirtualDisk(VirtualDevice):
             return "dev"
         elif disk_type == VirtualDisk.TYPE_DIR:
             return "dir"
+        elif disk_type == VirtualDisk.TYPE_NETWORK:
+            return "name"
         return "file"
 
     @staticmethod
@@ -427,7 +429,8 @@ class VirtualDisk(VirtualDevice):
 
     _XML_PROP_ORDER = [
         "type", "device",
-        "driver_name", "driver_type",
+        "driver_name", "driver_type", "protocol",
+        "auth_username", "auth_type", "auth_secret_uuid",
         "driver_cache", "driver_io", "error_policy",
         "_xmlpath", "target", "bus",
     ]
@@ -454,7 +457,11 @@ class VirtualDisk(VirtualDevice):
         if self._storage_creator:
             raise ValueError("Can't change disk path if storage creation info "
                              "has been set.")
-        self._change_backend(val, None)
+        if isinstance(val,str):
+            self._change_backend(val, None)
+        else:
+            # a volobj
+            self._change_backend(None, val)
         self._xmlpath = self.path
     path = property(_get_path, _set_path)
 
@@ -512,6 +519,31 @@ class VirtualDisk(VirtualDevice):
             drvtype = self._storage_backend.get_driver_type()
         return _qemu_sanitize_drvtype(self.type, drvtype)
 
+    def _get_default_protocol(self):
+        """
+        Default protocol for 'network'-type volumes
+        """
+        if self.type != self.TYPE_NETWORK:
+            return None
+
+        # FIXME don't know how to do this for StorageCreator
+        return self._storage_backend.get_protocol()
+        
+    def _get_default_auth_username(self):
+        if self.type != self.TYPE_NETWORK:
+            return None
+        return self._storage_backend.get_storage_pool().auth_username
+
+    def _get_default_auth_type(self):
+        if self.type != self.TYPE_NETWORK:
+            return None
+        return self._storage_backend.get_storage_pool().auth_type
+
+    def _get_default_auth_secret_uuid(self):
+        if self.type != self.TYPE_NETWORK:
+            return None
+        return self._storage_backend.get_storage_pool().auth_secret_uuid
+
 
     ##################
     # XML properties #
@@ -523,6 +555,15 @@ class VirtualDisk(VirtualDevice):
                            make_xpath_cb=_make_source_xpath,
                            clear_first=["./source/@" + target for target in
                                         _TARGET_PROPS])
+    protocol = XMLProperty("./source/@protocol",
+                           default_cb=_get_default_protocol)
+
+    auth_username = XMLProperty("./auth/@username",
+                                default_cb=_get_default_auth_username)
+    auth_type = XMLProperty("./auth/secret/@type",
+                            default_cb=_get_default_auth_type)
+    auth_secret_uuid = XMLProperty("./auth/secret/@uuid",
+                                   default_cb=_get_default_auth_secret_uuid)
 
     sourceStartupPolicy = XMLProperty("./source/@startupPolicy")
     device = XMLProperty("./@device",

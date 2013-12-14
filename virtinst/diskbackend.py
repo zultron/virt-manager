@@ -128,6 +128,9 @@ def check_if_path_managed(conn, path):
 
         raise ValueError(err)
 
+    if vol and not pool:
+        pool = vol.storagePoolLookupByVolume()
+
     return vol, pool, path_is_pool
 
 
@@ -461,7 +464,7 @@ class StorageBackend(_StorageBase):
         self._path = path
 
         if self._vol_object is not None:
-            self._pool_object = None
+            self._pool_object = self._vol_object.storagePoolLookupByVolume()
             self._path = None
         elif self._pool_object is not None:
             if self._path is None:
@@ -544,6 +547,8 @@ class StorageBackend(_StorageBase):
                     self._dev_type = "file"
                 elif t == libvirt.VIR_STORAGE_VOL_BLOCK:
                     self._dev_type = "block"
+                elif t == libvirt.VIR_STORAGE_VOL_NETWORK:
+                    self._dev_type = "network"
                 else:
                     self._dev_type = "file"
 
@@ -564,8 +569,22 @@ class StorageBackend(_StorageBase):
 
     def get_driver_type(self):
         if self._vol_object:
+            if self._get_vol_xml().format == 'unknown':
+                return 'raw'
             return self._get_vol_xml().format
         return None
 
+    def get_protocol(self):
+        """
+        Return the storage pool's protocol; needed for 'network'
+        volumes
+        """
+        return self._get_pool_xml().protocol()
+
     def is_managed(self):
         return bool(self._vol_object or self._pool_object)
+
+    def get_storage_pool(self):
+        # Can't figure out any other way to get pool defaults without
+        # exposing this to VirtualDisk
+        return self._get_pool_xml()

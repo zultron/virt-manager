@@ -92,6 +92,10 @@ class StoragePool(_StorageObject):
     TYPE_ISCSI   = "iscsi"
     TYPE_SCSI    = "scsi"
     TYPE_MPATH   = "mpath"
+    TYPE_RBD     = "rbd"
+
+    # 'network' type volume protocols
+    PROTOCOL_RBD = "rbd"
 
     # Pool type descriptions for use in higher level programs
     _descs = {}
@@ -103,6 +107,7 @@ class StoragePool(_StorageObject):
     _descs[TYPE_ISCSI]   = _("iSCSI Target")
     _descs[TYPE_SCSI]    = _("SCSI Host Adapter")
     _descs[TYPE_MPATH]   = _("Multipath Device Enumerator")
+    _descs[TYPE_RBD]     = _("RADOS Block Device")
 
     @staticmethod
     def get_pool_types():
@@ -160,6 +165,10 @@ class StoragePool(_StorageObject):
                     obj.source_path = parseobj.source_path
                     obj.host = parseobj.host
                     obj.source_name = parseobj.source_name
+                    obj.source_protocol = parseobj.source_protocol
+                    obj.auth_username = parseobj.auth_username
+                    obj.auth_type = parseobj.auth_type
+                    obj.auth_secret_uuid = parseobj.auth_secret_uuid
                     obj.format = parseobj.format
                     ret.append(obj)
                 child = child.next
@@ -277,6 +286,13 @@ class StoragePool(_StorageObject):
             return "./source/adapter/@name"
         return "./source/device/@path"
 
+    def _default_source_protocol(self):
+        if not self.supports_property("source_protocol"):
+            return None
+
+        if self.type == self.TYPE_RBD:
+            return "rbd"
+
     def _default_source_name(self):
         if not self.supports_property("source_name"):
             return None
@@ -295,6 +311,18 @@ class StoragePool(_StorageObject):
 
         return srcname
 
+    def _default_auth_username(self):
+        if not self.supports_property("auth_username"):
+            return None
+        if self.type == self.TYPE_RBD:
+            return 'admin'
+
+    def _default_auth_type(self):
+        if not self.supports_property("auth_type"):
+            return None
+        if self.type == self.TYPE_RBD:
+            return 'ceph'
+
     def _default_format_cb(self):
         if not self.supports_property("format"):
             return None
@@ -309,8 +337,9 @@ class StoragePool(_StorageObject):
     _XML_PROP_ORDER = ["name", "type", "uuid",
                        "capacity", "allocation", "available",
                        "format", "host",
-                       "source_path", "source_name", "target_path",
-                       "permissions"]
+                       "source_path", "source_name", "source_protocol",
+                       "auth_username", "auth_type", "auth_secret_uuid",
+                       "target_path", "permissions"]
 
     type = XMLProperty("./@type",
         doc=_("Storage device type the pool will represent."))
@@ -325,6 +354,7 @@ class StoragePool(_StorageObject):
     format = XMLProperty("./source/format/@type",
                          default_cb=_default_format_cb)
     host = XMLProperty("./source/host/@name")
+    port = XMLProperty("./source/host/@port")
     iqn = XMLProperty("./source/initiator/iqn/@name",
                       doc=_("iSCSI initiator qualified name"))
     source_path = XMLProperty(name="source path",
@@ -332,9 +362,18 @@ class StoragePool(_StorageObject):
     source_name = XMLProperty("./source/name",
                               default_cb=_default_source_name,
                               doc=_("Name of the Volume Group"))
+    source_protocol = XMLProperty("./source/protocol",
+                              default_cb=_default_source_protocol,
+                              doc=_("Name of the network volume protocol"))
 
     target_path = XMLProperty("./target/path",
                               default_cb=_get_default_target_path)
+
+    auth_username = XMLProperty("./source/auth/@username",
+                                default_cb=_default_auth_username)
+    auth_type = XMLProperty("./source/auth/@type",
+                            default_cb=_default_auth_type)
+    auth_secret_uuid = XMLProperty("./source/auth/secret/@uuid")
 
 
     ######################
@@ -345,8 +384,13 @@ class StoragePool(_StorageObject):
         users = {
             "source_path": [self.TYPE_FS, self.TYPE_NETFS, self.TYPE_LOGICAL,
                             self.TYPE_DISK, self.TYPE_ISCSI, self.TYPE_SCSI],
-            "source_name": [self.TYPE_LOGICAL],
-            "host": [self.TYPE_NETFS, self.TYPE_ISCSI],
+            "source_name": [self.TYPE_LOGICAL, self.TYPE_RBD],
+            "source_protocol": [self.TYPE_RBD],
+            "auth_username": [self.TYPE_RBD],
+            "auth_type": [self.TYPE_RBD],
+            "auth_secret_uuid": [self.TYPE_RBD],
+            "host": [self.TYPE_NETFS, self.TYPE_ISCSI, self.TYPE_RBD],
+            "port": [self.TYPE_RBD],
             "format": [self.TYPE_FS, self.TYPE_NETFS, self.TYPE_DISK],
             "iqn": [self.TYPE_ISCSI],
         }
@@ -379,7 +423,18 @@ class StoragePool(_StorageObject):
         xpath = self._make_source_xpath()
         if "/dir/" in xpath:
             return "dir"
+        if self.type in ("rbd"):
+            return "network"
         return "block"
+
+    def protocol(self):
+        # libvirt doesn't provide the <source protocol="proto"/>
+        # attribute in the pool or volume object XML, but requires it
+        # to create the volume, so fudge it here (I must be wrong
+        # about this, but haven't figured out the right answer)
+        if self.type == self.TYPE_RBD:
+            return self.PROTOCOL_RBD
+        return None
 
 
     ##################
@@ -473,6 +528,7 @@ class StorageVolume(_StorageObject):
 
     TYPE_FILE = getattr(libvirt, "VIR_STORAGE_VOL_FILE", 0)
     TYPE_BLOCK = getattr(libvirt, "VIR_STORAGE_VOL_BLOCK", 1)
+    TYPE_NETWORK = getattr(libvirt, "VIR_STORAGE_VOL_NETWORK", 3)
 
 
     def __init__(self, *args, **kwargs):
@@ -580,7 +636,7 @@ class StorageVolume(_StorageObject):
     ##################
 
     _XML_ROOT_NAME = "volume"
-    _XML_PROP_ORDER = ["name", "key", "capacity", "allocation", "format",
+    _XML_PROP_ORDER = ["name", "capacity", "allocation", "format",
                        "target_path", "permissions"]
 
     key = XMLProperty("./key")

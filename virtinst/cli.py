@@ -1478,11 +1478,12 @@ def parse_disk(guest, optstr, dev=None, validate=True):
     abspath, volinst, volobj = _parse_disk_source(guest, path, pool, vol,
                                                   size, fmt, sparse)
 
-    dev.path = volobj and volobj.path() or abspath
+    dev.path = volobj or abspath
     dev.read_only = ro
     dev.shareable = shared
-    dev.set_create_storage(size=size, fmt=fmt, sparse=sparse,
-                           vol_install=volinst, backing_store=backing_store)
+    if not volobj:
+        dev.set_create_storage(size=size, fmt=fmt, sparse=sparse,
+                               vol_install=volinst, backing_store=backing_store)
 
     set_param = _build_set_param(dev, opts)
 
@@ -1496,7 +1497,11 @@ def parse_disk(guest, optstr, dev=None, validate=True):
     set_param("error_policy", "error_policy")
     set_param("serial", "serial")
     set_param("target", "target")
+    set_param("protocol", "protocol")
     set_param("sourceStartupPolicy", "startup_policy")
+    set_param("auth_username", "auth_username")
+    set_param("auth_type", "auth_type")
+    set_param("auth_secret_uuid", "auth_secret_uuid")
 
     _check_leftover_opts(opts)
     if validate:
